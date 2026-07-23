@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 
 $Script:WinGetExe = 'winget'
-$Script:AppVersion = '0.3.2'
+$Script:AppVersion = '0.3.3'
 
 # ---------------------------------------------------------------------------
 # Initialisatie
@@ -373,6 +373,43 @@ function Test-PEFile {
     } catch { return $false }
 }
 
+function ConvertTo-AppVersion {
+    # Extract a comparable [version] from a tag/version string.
+    # '0.4.0-rc1' -> 0.4.0, 'v0.3.3' -> 0.3.3. Returns $null when no numeric
+    # version can be found, so callers can fail gracefully instead of throwing.
+    param([string]$Raw)
+    if (-not $Raw) { return $null }
+    $m = [regex]::Match($Raw, '\d+(\.\d+){1,3}')
+    if (-not $m.Success) { return $null }
+    try { return [version]$m.Value } catch { return $null }
+}
+
+function Get-FileSha256 {
+    param([string]$Path)
+    try {
+        $sha    = [System.Security.Cryptography.SHA256]::Create()
+        $stream = [System.IO.File]::OpenRead($Path)
+        try { $hash = $sha.ComputeHash($stream) } finally { $stream.Dispose(); $sha.Dispose() }
+        return ([System.BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+    } catch { return $null }
+}
+
+function Get-ExpectedSha256 {
+    # Parse a sha256sum-style checksums.txt ("<64-hex>  <filename>") and return
+    # the hash for $FileName, or $null if the file isn't listed.
+    param([string]$ChecksumsText, [string]$FileName)
+    if (-not $ChecksumsText) { return $null }
+    foreach ($line in ($ChecksumsText -split "`n")) {
+        $t = $line.Trim()
+        if (-not $t) { continue }
+        $m = [regex]::Match($t, '^([0-9a-fA-F]{64})\s+\*?(.+)$')
+        if ($m.Success -and ($m.Groups[2].Value.Trim() -ieq $FileName)) {
+            return $m.Groups[1].Value.ToLowerInvariant()
+        }
+    }
+    return $null
+}
+
 function Update-App {
     param(
         [Parameter(Mandatory)][string]$Url,
@@ -392,10 +429,14 @@ function Update-App {
         return [PSCustomObject]@{ Updated = $false; Reason = 'no_response' }
     }
 
-    try {
-        $latestVer  = [version]$info.Version
-        $currentVer = [version]$Script:AppVersion
-    } catch {
+    # Parse both versions defensively. A tag with a pre-release suffix
+    # (e.g. '0.4.0-rc1') would throw on a bare [version] cast; ConvertTo-AppVersion
+    # extracts the numeric core so comparison never crashes, and logs clearly
+    # instead of returning a silent 'invalid_version'.
+    $latestVer  = ConvertTo-AppVersion $info.Version
+    $currentVer = ConvertTo-AppVersion $Script:AppVersion
+    if (-not $latestVer -or -not $currentVer) {
+        Write-Log "Cannot parse version for update comparison (latest='$($info.Version)', current='$Script:AppVersion')" -Level WARN -Source WinGetCore
         return [PSCustomObject]@{ Updated = $false; Reason = 'invalid_version'; Latest = $info.Version }
     }
 
@@ -454,6 +495,14 @@ function Update-App {
         }
     }
 
+    # Re-validate the asset download URL. Test-TrustedUpdateUrl only ran on the
+    # API endpoint; the asset URL is derived from the API response, so verify it
+    # is itself an HTTPS github host before handing it to the downloader.
+    if (-not (Test-TrustedUpdateUrl $exeAsset.Url)) {
+        Write-Log "Update denied - asset URL not trusted: $($exeAsset.Url)" -Level WARN -Source WinGetCore
+        return [PSCustomObject]@{ Updated = $false; Reason = 'untrusted_url'; Latest = $info.Version }
+    }
+
     # Download naar tijdelijk bestand naast huidige exe
     $tempExe = "$ExePath.new"
     try {
@@ -473,6 +522,35 @@ function Update-App {
         Remove-Item $tempExe -Force -ErrorAction SilentlyContinue
         Write-Log "Download is not a valid .exe (PE header missing)" -Level ERROR -Source WinGetCore
         return [PSCustomObject]@{ Updated = $false; Reason = 'invalid_exe'; Latest = $info.Version }
+    }
+
+    # Verify SHA256 against the release's checksums.txt. A PE-header check only
+    # proves "this is an exe", not "this is our exe" — the hash confirms the bytes
+    # match what we published. If the release has no checksums.txt (older releases
+    # predating v0.3.3), log and proceed rather than blocking the update. This
+    # gives integrity against corrupt/in-transit-tampered downloads; it is not a
+    # substitute for code-signing (a fully compromised release could swap both).
+    $sumsAsset = $info.Assets | Where-Object { $_.Name -eq 'checksums.txt' } | Select-Object -First 1
+    if ($sumsAsset -and (Test-TrustedUpdateUrl $sumsAsset.Url)) {
+        try {
+            $sumsText = (Invoke-WebRequest -Uri $sumsAsset.Url -UseBasicParsing -TimeoutSec 30).Content
+            $expected = Get-ExpectedSha256 -ChecksumsText $sumsText -FileName $exeAsset.Name
+            if ($expected) {
+                $actual = Get-FileSha256 $tempExe
+                if ($actual -ne $expected) {
+                    Remove-Item $tempExe -Force -ErrorAction SilentlyContinue
+                    Write-Log "Checksum mismatch for $($exeAsset.Name): expected $expected got $actual" -Level ERROR -Source WinGetCore
+                    return [PSCustomObject]@{ Updated = $false; Reason = 'checksum_mismatch'; Latest = $info.Version }
+                }
+                Write-Log "SHA256 verified for $($exeAsset.Name)" -Source WinGetCore
+            } else {
+                Write-Log "checksums.txt present but no entry for $($exeAsset.Name); skipping hash check" -Level WARN -Source WinGetCore
+            }
+        } catch {
+            Write-Log "Could not fetch/verify checksums.txt: $_" -Level WARN -Source WinGetCore
+        }
+    } else {
+        Write-Log "No checksums.txt in release; skipping SHA256 verification" -Level WARN -Source WinGetCore
     }
 
     Write-Log "Download succeeded ($([math]::Round((Get-Item $tempExe).Length/1KB,1)) KB), swapping exe..." -Source WinGetCore

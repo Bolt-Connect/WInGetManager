@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-21
+
+### Added
+- **Self-update integrity via SHA256** — every release now ships a `checksums.txt`, and the self-update verifies the downloaded `WinGetManager.exe` against its published hash before swapping it in. A PE-header check only proves "this is an exe"; the hash proves the bytes match what we published. Releases that predate `checksums.txt` still update (the check is skipped with a logged warning). This is integrity protection against corrupt or in-transit-tampered downloads — not a substitute for code-signing.
+- **Actionable "WinGet not found" prompt** — when App Installer/winget is missing, the app now offers to open the Microsoft Store to install it (one click) instead of showing a dead-end error and exiting.
+
+### Changed
+- **Self-update re-validates the asset download URL** — `Test-TrustedUpdateUrl` now runs on the resolved asset URL just before download, not only on the API endpoint, closing the gap where a derived URL was trusted implicitly.
+
+### Fixed
+- **Install now prompts for admin rights instead of silently doing nothing** — the install action was the only operation without UAC elevation (update and uninstall already had it). Installing a machine-scope package such as an MSI/wix installer therefore never showed a UAC prompt and quietly failed. Install now mirrors the update flow: when winget reports it needs elevation, the app offers to retry with administrator rights.
+- **Install no longer reports false success** — the result was judged purely on winget's exit code, so a package that was never actually installed could still produce "installed successfully". After a reported success the app now verifies the package really appears in the installed list, and says so honestly when it does not.
+- **Async operations are now logged** — `Start-WinGetWork` (used by install, update and uninstall) recorded nothing, so a failed operation left no trace in the log. It now logs winget's exit code for every operation, plus the last lines of output when something goes wrong.
+- **Bulk operations now log which packages failed** — bulk update and bulk uninstall reported only a total ("3 of 12 failed") with no record of *which* packages failed or why. Per-package exit codes are now collected in the runspace and written to the log when the batch finishes. Logs stay local; nothing is transmitted.
+- **Self-update no longer chokes on pre-release-style version tags** — version comparison now extracts the numeric core (e.g. `0.4.0-rc1` → `0.4.0`) instead of throwing on a bare `[version]` cast, and logs clearly instead of returning a silent `invalid_version`.
+
+### Tests
+- **i18n key-parity test** (`tests/Test-I18nParity.ps1`) — asserts the `nl-NL` and `en-US` dictionaries expose exactly the same key set, so a translation added to one language but forgotten in the other (which would surface as a raw `{{Key}}` in the UI) fails the build. Dependency-free (no Pester) and wired into CI.
+
+---
+
 ## [0.3.2] - 2026-06-13
 
 ### Changed
@@ -220,7 +241,8 @@ First public release.
 - Smart App Control (Windows 11) blocks running the exe — disabling is a one-way action. Will be resolved once the app is distributed via Microsoft Store.
 - SmartScreen shows an "Unknown publisher" warning on first launch (click *More info* → *Run anyway*). Will be resolved later via SignPath or Microsoft Store distribution.
 
-[Unreleased]: https://github.com/Bolt-Connect/WinGet-Manager/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/Bolt-Connect/WinGet-Manager/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/Bolt-Connect/WinGet-Manager/releases/tag/v0.3.3
 [0.3.2]: https://github.com/Bolt-Connect/WinGet-Manager/releases/tag/v0.3.2
 [0.3.1]: https://github.com/Bolt-Connect/WinGet-Manager/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Bolt-Connect/WinGet-Manager/releases/tag/v0.3.0

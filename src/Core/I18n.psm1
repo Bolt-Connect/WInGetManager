@@ -103,6 +103,7 @@ $Script:Strings = @{
         'Status.SearchResults'    = '{0} resultaten voor ''{1}'''
         'Status.InstallSuccess'   = 'Installatie geslaagd'
         'Status.InstallFailed'    = 'Installatie mislukt'
+        'Status.InstallCancelled' = 'Installatie geannuleerd'
         'Status.FetchingDetails'  = 'Details ophalen...'
         'Status.DetailsError'     = 'Fout bij details'
         'Status.LoadingInstalledPkgs' = 'Geïnstalleerde packages laden...'
@@ -133,6 +134,9 @@ $Script:Strings = @{
         'Dialog.ConfirmInstall'   = 'Installeer ''{0}'' ({1})?'
         'Dialog.InstallSuccess'   = '''{0}'' succesvol geïnstalleerd.'
         'Dialog.InstallFailed'    = 'Installatie mislukt: {0}'
+        'Dialog.InstallNotVerified' = '''{0}'' meldde succes, maar het pakket staat niet in de lijst met geïnstalleerde programma''s.
+
+Waarschijnlijk is de installatie niet echt uitgevoerd. Probeer het opnieuw, eventueel met administrator-rechten.'
         'Dialog.LoadFailed'       = 'Laden mislukt: {0}'
         'Dialog.UninstallStillRunning' = 'Verwijderen mislukt: {0} draait nog.
 
@@ -214,7 +218,14 @@ Wilt u de download-pagina openen om de nieuwe Setup.exe handmatig te downloaden?
         'Update.InvalidExe'       = 'Download is geen geldige executable - mogelijk corrupt of gemanipuleerd.'
         'Update.UntrustedUrl'     = 'Update-URL is niet vertrouwd. Alleen github.com URLs worden toegestaan.'
         'Update.NotExeRuntime'    = 'Self-update werkt alleen vanuit de .exe distributie.'
+        'Update.InvalidVersion'   = 'versienummer van de release kon niet worden gelezen.'
+        'Update.ChecksumMismatch' = 'controlesom komt niet overeen - de download is beschadigd of gewijzigd. Update afgebroken.'
         'Update.UnknownReason'    = 'Onbekende reden: {0}'
+
+        # --- WinGet-ontbreekt onboarding ---
+        'Dialog.WinGetMissingPrompt' = 'WinGet (App Installer) is niet gevonden op dit systeem. WinGet Manager heeft dit nodig om pakketten te beheren.
+
+De Microsoft Store openen om App Installer te installeren?'
 
         # --- Core throws (fatal errors) ---
         'Throw.WinGetNotFound'    = 'WinGet niet gevonden. Installeer App Installer via de Microsoft Store.'
@@ -448,6 +459,7 @@ Nu downloaden en bijwerken? De app wordt automatisch herstart.'
         'Status.SearchResults'    = '{0} results for ''{1}'''
         'Status.InstallSuccess'   = 'Install succeeded'
         'Status.InstallFailed'    = 'Install failed'
+        'Status.InstallCancelled' = 'Installation cancelled'
         'Status.FetchingDetails'  = 'Fetching details...'
         'Status.DetailsError'     = 'Error fetching details'
         'Status.LoadingInstalledPkgs' = 'Loading installed packages...'
@@ -478,6 +490,9 @@ Nu downloaden en bijwerken? De app wordt automatisch herstart.'
         'Dialog.ConfirmInstall'   = 'Install ''{0}'' ({1})?'
         'Dialog.InstallSuccess'   = '''{0}'' installed successfully.'
         'Dialog.InstallFailed'    = 'Install failed: {0}'
+        'Dialog.InstallNotVerified' = '''{0}'' reported success, but the package does not appear in the list of installed programs.
+
+The installation most likely did not actually run. Please try again, if needed with administrator rights.'
         'Dialog.LoadFailed'       = 'Load failed: {0}'
         'Dialog.UninstallStillRunning' = 'Uninstall failed: {0} is still running.
 
@@ -559,7 +574,14 @@ Open the download page to manually download the new Setup.exe?'
         'Update.InvalidExe'       = 'Download is not a valid executable - possibly corrupt or tampered with.'
         'Update.UntrustedUrl'     = 'Update URL is not trusted. Only github.com URLs are allowed.'
         'Update.NotExeRuntime'    = 'Self-update only works from the .exe distribution.'
+        'Update.InvalidVersion'   = 'could not read the version number of the release.'
+        'Update.ChecksumMismatch' = 'checksum does not match - the download is corrupt or tampered with. Update aborted.'
         'Update.UnknownReason'    = 'Unknown reason: {0}'
+
+        # --- WinGet-missing onboarding ---
+        'Dialog.WinGetMissingPrompt' = 'WinGet (App Installer) was not found on this system. WinGet Manager needs it to manage packages.
+
+Open the Microsoft Store to install App Installer?'
 
         # --- Core throws (fatal errors) ---
         'Throw.WinGetNotFound'    = 'WinGet not found. Install App Installer via the Microsoft Store.'
@@ -806,4 +828,10 @@ function Apply-Translations {
     }
 }
 
-Export-ModuleMember -Function Initialize-I18n, Get-CurrentLanguage, Get-AvailableLanguages, Get-Text, Apply-Translations
+function Get-I18nStrings {
+    # Returns the raw per-language string table. Used by the key-parity test
+    # (tests/Test-I18nParity.ps1) to assert nl-NL and en-US stay in sync.
+    return $Script:Strings
+}
+
+Export-ModuleMember -Function Initialize-I18n, Get-CurrentLanguage, Get-AvailableLanguages, Get-Text, Apply-Translations, Get-I18nStrings

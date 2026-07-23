@@ -17,6 +17,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: i18n key parity test
+        shell: powershell
+        run: |
+          .\tests\Test-I18nParity.ps1
+
       - name: Install PS2EXE module
         shell: powershell
         run: |
@@ -87,6 +92,22 @@ jobs:
           # Stable name for /releases/latest/download/ URL
           Copy-Item "release\WinGetManager-$version-portable.zip" "release\WinGetManager-portable.zip"
 
+      - name: Generate SHA256 checksums
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: powershell
+        run: |
+          # sha256sum-style "<hash>  <filename>" over every published asset.
+          # The self-update verifies build\WinGetManager.exe against its entry here,
+          # and users can verify any download manually.
+          $targets = Get-ChildItem -File 'build\WinGetManager.exe', 'release\*.exe', 'release\*.zip'
+          $lines = foreach ($f in $targets) {
+            $h = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
+            "$h  $($f.Name)"
+          }
+          $lines | Set-Content 'release\checksums.txt' -Encoding ASCII
+          Write-Host "----- checksums.txt -----"
+          Get-Content 'release\checksums.txt' | Write-Host
+
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -97,6 +118,7 @@ jobs:
             release/WinGetManager-Setup.exe
             release/WinGetManager-${{ github.ref_name }}-portable.zip
             release/WinGetManager-portable.zip
+            release/checksums.txt
           generate_release_notes: true
           draft: false
           prerelease: false

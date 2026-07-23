@@ -24,7 +24,17 @@ Initialize-Logging -LogDirectory (Join-Path $ScriptRoot $cfg.LogDirectory) `
 try {
     Initialize-WinGetCore -WinGetPath $cfg.WinGetPath
 } catch {
-    [System.Windows.MessageBox]::Show($_.Exception.Message, (Get-Text 'Status.WinGetMissing'), "OK", "Error") | Out-Null
+    # winget/App Installer is missing. Instead of a dead-end error, offer to open
+    # the Microsoft Store so the user can install it in one click.
+    $answer = [System.Windows.MessageBox]::Show(
+        (Get-Text 'Dialog.WinGetMissingPrompt'),
+        (Get-Text 'Status.WinGetMissing'),
+        'YesNo', 'Warning')
+    if ($answer -eq 'Yes') {
+        # ms-windows-store:// opens the Store app directly; fall back to the web page.
+        try { Start-Process 'ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1' }
+        catch { try { Start-Process 'https://apps.microsoft.com/detail/9nblggh4nns1' } catch {} }
+    }
     exit 1
 }
 
@@ -403,7 +413,7 @@ $ActiveTheme = Resolve-ActiveTheme -Preference $cfg.Theme
                     <Button x:Name="BtnCheckUpdates" Content="{{Header.CheckUpdates}}"
                             Style="{StaticResource BtnGhost}"/>
                     <Button x:Name="BtnSelfUpdate"   Content="{{Header.SelfUpdate}}"
-                            Style="{StaticResource BtnYellow}"/>
+                            Margin="8,0,0,0" Style="{StaticResource BtnYellow}"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -1403,6 +1413,15 @@ function Start-WinGetWork {
             } finally {
                 $ps.Dispose(); $rs.Dispose()
             }
+            # Log what winget actually returned. Without this the async path (used by
+            # install/update/uninstall) leaves no trace, which makes a "succeeded but
+            # nothing happened" report impossible to diagnose afterwards.
+            Write-Log "winget exit $exit for: $($WinGetArgs -join ' ')" `
+                      -Level $(if ($exit -eq 0) { 'INFO' } else { 'WARN' }) -Source GUI
+            if ($exit -ne 0 -and $output) {
+                $tail = ($output -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 5) -join ' | '
+                if ($tail) { Write-Log "winget output: $tail" -Level WARN -Source GUI }
+            }
             $Window.IsEnabled = $true
             # Refocus our window after elevated child finishes (UAC tends to steal focus)
             if ($Elevated) { Restore-AppForeground }
@@ -1645,18 +1664,55 @@ $BtnInstallSelected.Add_Click({
     $cmdArgs = @('install','--id',$id,'--exact','--scope',$cfg.DefaultScope,
                  '--silent','--accept-source-agreements','--accept-package-agreements','--disable-interactivity')
 
-    Start-WinGetWork -WinGetArgs $cmdArgs -BusyMessage (Get-Text 'Busy.Installing' -FormatArgs @($name)) -OnDone {
-        param($exit, $output)
-        if ($exit -eq 0) {
-            Show-Info (Get-Text 'Dialog.InstallSuccess' -FormatArgs @($name))
-            Set-Status (Get-Text 'Status.InstallSuccess')
-            Refresh-Installed
-        } else {
+    # Mirrors the update flow: retry elevated when winget reports it needs admin.
+    # Without this, installing a machine-scope package (e.g. an MSI/wix installer
+    # like paint.net) never prompts for UAC and quietly does nothing.
+    $doInstall = $null
+    $doInstall = {
+        param([bool]$Elevated = $false)
+        $workArgs = @{
+            WinGetArgs  = $cmdArgs
+            BusyMessage = (Get-Text 'Busy.Installing' -FormatArgs @($name))
+        }
+        if ($Elevated) { $workArgs.Elevated = $true }
+        Start-WinGetWork @workArgs -OnDone {
+            param($exit, $output)
+            if ($exit -eq 0) {
+                Refresh-Installed
+                # Never claim success on the exit code alone: winget can return 0
+                # without actually installing anything. Confirm the package really
+                # shows up in the installed list before telling the user it worked.
+                if (Test-PackageInstalled $id) {
+                    Show-Info (Get-Text 'Dialog.InstallSuccess' -FormatArgs @($name))
+                    Set-Status (Get-Text 'Status.InstallSuccess')
+                } else {
+                    Write-Log "Install of $id returned exit 0 but the package is not in the installed list" -Level WARN -Source GUI
+                    Show-Error (Get-Text 'Dialog.InstallNotVerified' -FormatArgs @($name))
+                    Set-Status (Get-Text 'Status.InstallFailed')
+                }
+                return
+            }
+            # User dismissed the UAC prompt
+            if ($Elevated -and $exit -eq 1223) {
+                Set-Status (Get-Text 'Status.InstallCancelled')
+                return
+            }
             $info = Get-WinGetErrorInfo $exit
+            if ($info.Action -eq 'elevate' -and -not $Elevated) {
+                if (Ask-Confirm (Get-Text 'Dialog.RequiresAdmin' -FormatArgs @($name))) {
+                    Write-Log "Retrying install with elevation for $name" -Source GUI
+                    & $doInstall -Elevated $true
+                    return
+                }
+                Set-Status (Get-Text 'Status.InstallCancelled')
+                return
+            }
             Show-Error (Get-Text 'Dialog.InstallFailed' -FormatArgs @($info.Msg))
             Set-Status (Get-Text 'Status.InstallFailed')
-        }
+        }.GetNewClosure()
     }.GetNewClosure()
+
+    & $doInstall
 })
 
 $BtnShowDetails.Add_Click({
@@ -1678,6 +1734,22 @@ $BtnShowDetails.Add_Click({
 # ---------------------------------------------------------------------------
 
 $Script:AllInstalled = @()
+
+function Test-PackageInstalled {
+    <#
+        Returns $true when $Id appears in the currently loaded Installed grid.
+        Call this AFTER Refresh-Installed so the list reflects reality. Used to
+        verify an install actually landed, because a winget exit code of 0 does
+        not by itself prove anything was installed.
+    #>
+    param([Parameter(Mandatory)][string]$Id)
+    $items = $GridInstalled.ItemsSource
+    if (-not $items) { return $false }
+    foreach ($item in $items) {
+        if ($item.Id -and $item.Id -eq $Id) { return $true }
+    }
+    return $false
+}
 
 function Refresh-Installed {
     Set-Status (Get-Text 'Status.LoadingInstalledPkgs') $true
@@ -1857,6 +1929,7 @@ function Start-BulkUninstall {
         Current = 0; Total = $Packages.Count; CurrentName = ''; Done = $false
         Ok = 0; Fail = 0; FailedNames = @()
         NeedsAdmin = @()
+        Failures   = @()   # [PSCustomObject]@{Id, Name, Exit} - logged on the UI thread
     })
 
     $pkgInfo = @($Packages | ForEach-Object { [PSCustomObject]@{ Id = $_.Id; Name = $_.Name } })
@@ -1878,6 +1951,7 @@ function Start-BulkUninstall {
             if ($ec -eq 0) { $progress.Ok++ }
             else {
                 $progress.Fail++; $progress.FailedNames += $pkg.Name
+                $progress.Failures += [PSCustomObject]@{ Id = $pkg.Id; Name = $pkg.Name; Exit = $ec }
                 if ($ec -eq -1978334969) {
                     $progress.NeedsAdmin += [PSCustomObject]@{ Id = $pkg.Id; Name = $pkg.Name }
                 }
@@ -1902,6 +1976,13 @@ function Start-BulkUninstall {
             Refresh-Installed
             $msg = Get-Text 'BulkResult.Uninstall' -FormatArgs @($progress.Ok, $progress.Fail)
             Set-Status $msg
+
+            # Log the outcome (Write-Log is unavailable inside the runspace, so the
+            # per-package exit codes are collected there and written out here).
+            Write-Log "Bulk uninstall finished: $($progress.Ok) ok, $($progress.Fail) failed (of $($progress.Total))" -Source GUI
+            foreach ($f in $progress.Failures) {
+                Write-Log "Bulk uninstall failed: $($f.Name) [$($f.Id)] exit $($f.Exit)" -Level WARN -Source GUI
+            }
 
             if ($progress.NeedsAdmin.Count -gt 0) {
                 $names = ($progress.NeedsAdmin | ForEach-Object { $_.Name }) -join "`n  - "
@@ -2115,6 +2196,9 @@ function Start-BulkUpdate {
         Fail        = 0
         FailedNames = @()
         NeedsAdmin  = @()    # array of [PSCustomObject]@{Id, Name} that failed with -1978334969
+        # Per-package exit codes for failures. Write-Log does not exist inside the
+        # runspace, so we collect here and log from the UI thread when the batch ends.
+        Failures    = @()    # array of [PSCustomObject]@{Id, Name, Exit}
     })
 
     $pkgInfo = @($Packages | ForEach-Object {
@@ -2151,6 +2235,7 @@ function Start-BulkUpdate {
             } else {
                 $progress.Fail++
                 $progress.FailedNames += $pkg.Name
+                $progress.Failures += [PSCustomObject]@{ Id = $pkg.Id; Name = $pkg.Name; Exit = $ec }
                 if ($ec -eq -1978334969) {
                     $progress.NeedsAdmin += [PSCustomObject]@{ Id = $pkg.Id; Name = $pkg.Name }
                 }
@@ -2176,6 +2261,13 @@ function Start-BulkUpdate {
             Refresh-Installed
             $msg = Get-Text 'BulkResult.Update'    -FormatArgs @($progress.Ok, $progress.Fail)
             Set-Status $msg
+
+            # Log the outcome. Without this a "3 of 12 failed" result leaves no
+            # record of WHICH packages failed or why.
+            Write-Log "Bulk update finished: $($progress.Ok) ok, $($progress.Fail) failed (of $($progress.Total))" -Source GUI
+            foreach ($f in $progress.Failures) {
+                Write-Log "Bulk update failed: $($f.Name) [$($f.Id)] exit $($f.Exit)" -Level WARN -Source GUI
+            }
 
             # If some failed with "needs admin", offer one batched UAC retry.
             # We skip this branch if we're already in the elevated run.
@@ -2581,6 +2673,8 @@ $BtnSelfUpdate.Add_Click({
                 'download_failed'  { Get-Text 'Update.DownloadFailed' }
                 'corrupt_download' { Get-Text 'Update.CorruptDownload' }
                 'invalid_exe'      { Get-Text 'Update.InvalidExe' }
+                'checksum_mismatch'{ Get-Text 'Update.ChecksumMismatch' }
+                'invalid_version'  { Get-Text 'Update.InvalidVersion' }
                 'untrusted_url'    { Get-Text 'Update.UntrustedUrl' }
                 'not_exe_runtime'  { Get-Text 'Update.NotExeRuntime' }
                 default            { Get-Text 'Update.UnknownReason' -FormatArgs @($result.Reason) }

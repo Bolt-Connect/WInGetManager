@@ -109,13 +109,20 @@ The bundler merges the silent script body into the main script via `Read-Cleaned
 Only works in the EXE distribution. Steps:
 
 1. `Get-LatestAppVersion` fetches the GitHub Releases API
-2. Compare `[version]$latest -gt [version]$Script:AppVersion`
-3. Download `.exe` asset as `WinGetManager.exe.new`
-4. Verify PE header (`Test-PEFile`) and HTTPS+github.com host (`Test-TrustedUpdateUrl`)
-5. Write `WinGetManager-Update-*.bat` to TEMP, spawn it
-6. The bat waits for exit, moves `.new` → original, restarts
+2. Compare via `ConvertTo-AppVersion` (extracts the numeric core so a pre-release-style tag like `0.4.0-rc1` doesn't throw on the `[version]` cast)
+3. Re-validate the asset URL with `Test-TrustedUpdateUrl` (the API URL was already checked; the derived asset URL must be re-checked)
+4. Download `.exe` asset as `WinGetManager.exe.new`
+5. Verify PE header (`Test-PEFile`) **and** SHA256 against the release's `checksums.txt` (`Get-FileSha256` / `Get-ExpectedSha256`). If the release has no `checksums.txt`, the hash check is skipped with a logged warning (backward-compat with pre-v0.3.3 releases)
+6. Write `WinGetManager-Update-*.bat` to TEMP, spawn it
+7. The bat waits for exit, moves `.new` → original, restarts
+
+`checksums.txt` is generated in CI (see `build.yml`) as sha256sum-style `<hash>  <filename>` lines over every release asset. The self-update matches the `WinGetManager.exe` line by asset name. SHA256 gives integrity against corrupt/tampered downloads — it is **not** authenticity (a fully compromised release could swap both the exe and the checksums); that's what code-signing (roadmap) is for.
 
 `$Script:AppVersion` in `WinGet-Core.psm1` must match the release tag.
+
+## Tests
+
+`tests/Test-I18nParity.ps1` is a dependency-free (no Pester) script that asserts the `nl-NL` and `en-US` dictionaries in `I18n.psm1` share the exact same key set — run it after adding any string. It relies on the exported `Get-I18nStrings` helper. CI runs it before the build (fail-fast), so a key added to one language but not the other breaks the build instead of shipping a raw `{{Key}}`.
 
 ## What to do for a new feature
 
@@ -158,6 +165,10 @@ Only works in the EXE distribution. Steps:
 - **`local` is not a real winget source** — it's our derived label for ARP-tracked apps (installed outside winget). WinGet cannot update or even check version for these, so the Installed-tab status pill must show `— Unknown` rather than misleading "Up-to-date".
 - **`winget source list` does not support `--output json`** — calling it with `-UseJson` returns exit code `-1978335230`. Use text parsing via `Parse-SourceText`. Other commands like `winget upgrade --output json` are also unsupported on older winget versions (1.x).
 - **`[ordered]@{}` (`OrderedDictionary`) has NO `.Clone()` method** — `$hashtable.Clone()` works, but an ordered dictionary throws `"does not contain a method named 'Clone'"` at runtime. This bit us in `Config.psm1` (`$Defaults.Clone()`) where it stayed latent until a fresh install with no `settings.json` finally hit that path. Copy ordered dicts by hand: `$c = [ordered]@{}; foreach ($k in $src.Keys) { $c[$k] = $src[$k] }`. See `Copy-OrderedDict` in `Config.psm1`.
+- **A winget exit code of `0` does NOT prove anything was installed** — winget can return success while the installer silently no-ops (e.g. a machine-scope MSI/wix package run without elevation). Never report success on the exit code alone; the install flow calls `Refresh-Installed` and then `Test-PackageInstalled` to confirm the package actually appears before telling the user it worked.
+- **Every winget action that can touch machine scope needs an elevation retry** — `Get-WinGetErrorInfo` maps exit code `-1978334969` to `Action = 'elevate'`, but that only helps if the caller acts on it. Install originally lacked this (update and uninstall had it), so installing an MSI package never showed a UAC prompt. Mirror the `$doUpdate` / `$doInstall` self-referencing scriptblock pattern: `param([bool]$Elevated = $false)`, retry via `& $doX -Elevated $true`, and treat exit `1223` as "user dismissed UAC".
+- **`Write-Log` does not exist inside the bulk runspaces** — `Start-BulkUpdate` / `Start-BulkUninstall` create a bare runspace, so you cannot log from the loop. Collect per-package results into the synchronized `$progress` hashtable (see the `Failures` array of `@{Id, Name, Exit}`) and write them out from the DispatcherTimer tick on the UI thread, where `Write-Log` is available.
+- **`Start-WinGetWork` runs winget directly (`& winget @a`), not through the `cmd /c MODE CON` wrapper** — so the wide-console truncation fix does NOT apply to the async path. It also means exit codes come from `$LASTEXITCODE` inside the runspace. The tick handler logs the exit code (and output tail on failure) for every async operation; keep that logging, it is the only trace these operations leave.
 - **Self-update only validates the API URL, not asset URLs** — `Update-App` runs `Test-TrustedUpdateUrl` on the configured API endpoint, then trusts the asset/`html_url` values it returns. Any code that hands one of those derived URLs to `Start-Process` or a downloader should re-run `Test-TrustedUpdateUrl` on it first (the `requires_admin` "open download page" flow in `MainWindow.ps1` does this). `Test-TrustedUpdateUrl` must stay in `WinGet-Core.psm1`'s `Export-ModuleMember` list or dev-mode (Import-Module) GUI calls break.
 
 ## Roadmap (see also README)

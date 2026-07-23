@@ -23,7 +23,7 @@ Lightweight GUI for Windows Package Manager (`winget`) with dark/light theme and
 
 ## 📸 Screenshot
 
-![WinGet Manager v0.3.1 — Installed tab in dark mode](assets/screenshots/v0.3.2-installed-dark.png)
+![WinGet Manager v0.3.3 — Installed tab in dark mode](assets/screenshots/v0.3.3-installed-dark.png)
 
 *Dark mode, Installed tab — package list with status pills, source column (winget / msstore / local), and multi-select bulk actions.*
 
@@ -113,7 +113,7 @@ installer/             Inno Setup script
 
 ## Roadmap
 
-### 🧪 v0.3.2 (current public beta)
+### 🧪 v0.3.3 (current public beta)
 - [x] Dark / Light / Auto theme (follows Windows system preference)
 - [x] Async UI with live progress feedback
 - [x] Auto-detect and close apps blocking updates
@@ -140,6 +140,12 @@ installer/             Inno Setup script
 - [x] **System-wide installer default** — `Install for all users (recommended)` is pre-selected; per-user fallback remains for non-admin users
 - [x] **Installer language picker shown at start** — every install starts with explicit EN/NL selection, defaulted to system locale
 - [x] **Program Files detection in self-update** — friendly "download Setup.exe manually" message instead of silent failure when running from `Program Files\`
+- [x] **SHA256 self-update integrity** — releases ship `checksums.txt`; the self-update verifies the download hash before swapping the exe
+- [x] **Actionable "WinGet not found" prompt** — offers to open the Microsoft Store to install App Installer
+- [x] **Robust version comparison** — self-update no longer breaks on pre-release-style version tags
+- [x] **i18n key-parity test** — CI fails if the NL/EN dictionaries drift out of sync
+- [x] **UAC elevation for install** — installing a machine-scope package now offers a retry with admin rights instead of silently doing nothing
+- [x] **Verified install result** — success is confirmed against the installed list, so winget exiting `0` without installing no longer reports "installed successfully"
 
 ### 🚧 v0.4.0 — UX polish
 - [ ] System tray icon (minimize to tray, background update check)

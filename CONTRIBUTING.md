@@ -57,6 +57,9 @@ Open an issue labeled `enhancement` describing:
 3. In code, use `Get-Text 'Key.Name'` (or `-FormatArgs @($var)` for placeholders)
 4. **Log messages stay English** — use literal strings, not `Get-Text`
 
+> CI runs `tests/Test-I18nParity.ps1`, which fails the build if a key exists in one
+> language but not the other. Run it locally before pushing (see **Tests** below).
+
 ## Project structure
 
 ```
@@ -65,9 +68,21 @@ src/
 ├── GUI/MainWindow.ps1 WPF interface
 └── Silent/            Headless CLI
 
+tests/                 Dependency-free test scripts (run in CI)
 Build-Exe.ps1          Bundles into a single .exe via PS2EXE
 .github/workflows/     CI/CD for auto-build
 ```
+
+## Tests
+
+The project uses lightweight, dependency-free PowerShell test scripts (no Pester
+required) that also run in CI before every build. Run them locally before pushing:
+
+```powershell
+.\tests\Test-I18nParity.ps1   # asserts nl-NL and en-US share the exact same key set
+```
+
+A non-zero exit code means a test failed; the output lists what's wrong.
 
 ## Building locally
 
@@ -84,7 +99,7 @@ cd WinGet-Manager
 
 ```powershell
 winget install JRSoftware.InnoSetup
-.\Build-Installer.ps1 -Version 0.3.2     # output: release\WinGetManager-Setup-0.3.2.exe
+.\Build-Installer.ps1 -Version 0.3.3     # output: release\WinGetManager-Setup-0.3.3.exe
 ```
 
 ### Regenerating the icon

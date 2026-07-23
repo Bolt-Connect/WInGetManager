@@ -45,6 +45,25 @@ Keep this project focused on:
 - Insecure install flows
 - Privacy issues (logging of sensitive data)
 
+## Self-update channel
+
+The built-in self-update is the most security-sensitive path. Current measures:
+
+- **HTTPS + host allow-list** — both the releases API URL and the resolved asset
+  URLs are validated against `api.github.com` / `github.com` /
+  `objects.githubusercontent.com` (`Test-TrustedUpdateUrl`) before any request.
+- **PE-header check** — the downloaded file must be a valid Windows executable
+  before it is used.
+- **SHA256 verification** (v0.3.3+) — each release publishes `checksums.txt`, and
+  the downloaded `WinGetManager.exe` is verified against its published hash before
+  replacing the running exe. This protects against corrupt or in-transit-tampered
+  downloads. It is **not** authenticity: a fully compromised release could swap
+  both the exe and the checksums. Genuine authenticity requires code-signing,
+  which is on the roadmap.
+
+Users can verify any download manually against the `checksums.txt` published with
+each release.
+
 ## Disclosure
 
 After a patch is released, the issue is made public via a GitHub Security Advisory with a CVE if applicable.
